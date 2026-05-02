@@ -134,6 +134,14 @@ lib/src/main/java/com/example/cxrglobal/
 
 粒度の高い区別 (key down/up と exit を分けたい等) が必要になった場合は AIDL Stub 側 (`aiEventStub`) を直接書き換える拡張点として残してある。
 
+### ネイティブライブラリのロード (Caps native の暗黙登録)
+
+本家 `CXRLink(Context)` コンストラクタは `System.loadLibrary("cxr-sock-proto-jni")` を呼んでおり、その `.so` の `JNI_OnLoad` 内で `com.rokid.cxr.Caps` の native メソッドが `RegisterNatives` される。CXR-L の wire 規約 (グラス側 `Caps.fromBytes()` ↔ スマホ側 `new Caps().serialize()`) は Caps を前提にしているため、本家サンプルでも `sendCustomCmd` 等の payload を Caps で組み立てるのが正規ルート。
+
+本 wrapper は本家 `CXRLink` を経由しないので、この暗黙ロードを引き継がないと利用側で `Caps().serialize()` が `UnsatisfiedLinkError` で落ちる。「本家と同じ書き味」が建前である以上、この保証責任は wrapper 側にある。よって `CXRLink` の `init { }` ブロックで本家と同じ `loadLibrary("cxr-sock-proto-jni")` を呼んでいる。
+
+`.so` 自体は `client-l:1.0.1` AAR の `jni/{arm64-v8a,armeabi-v7a}/` に同梱されているため、`implementation` 依存経由で利用側 APK にそのまま入る。利用側で追加の jniLibs 設定は不要。
+
 ### スレッディング
 
 AIDL コールバックは Binder スレッドで届く。wrapper はスレッド切り替えしない (透過的に転送する)。利用側で UI を触る場合は自分で `runOnUiThread` 等する。`CXRLink` のフィールド (`glassConnected` 等) は `@Volatile` で保護しているがそれ以上の同期はない。

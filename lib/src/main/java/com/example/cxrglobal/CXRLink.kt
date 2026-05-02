@@ -32,6 +32,16 @@ import java.io.File
  */
 class CXRLink(private val context: Context) {
 
+    init {
+        // 本家 CXRLink(Context) のコンストラクタが System.loadLibrary("cxr-sock-proto-jni") を
+        // 呼ぶのを再現。この .so の JNI_OnLoad で com.rokid.cxr.Caps の native メソッドが
+        // RegisterNatives される。これがないと利用側で Caps().serialize() を使ったとき
+        // UnsatisfiedLinkError になる (CXR-L の wire 規約は Caps を payload に使うため
+        // 本家と同じ書き味を維持するならここでロードしておくのが筋)。
+        runCatching { System.loadLibrary("cxr-sock-proto-jni") }
+            .onFailure { Log.w(LOG_TAG, "loadLibrary(cxr-sock-proto-jni) failed: ${it.message}") }
+    }
+
     private var service: IMediaStreamService? = null
     private var bound = false
     @Volatile private var glassConnected = false
