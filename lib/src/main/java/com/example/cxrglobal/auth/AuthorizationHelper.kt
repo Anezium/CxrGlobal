@@ -1,19 +1,35 @@
-package com.example.cxrglobal
+package com.example.cxrglobal.auth
 
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
+import com.example.cxrglobal.AUTH_ACTION
+import com.example.cxrglobal.AUTH_RESULT_CANCEL
+import com.example.cxrglobal.AUTH_RESULT_SUCCESS
+import com.example.cxrglobal.EXTRA_AUTH_RESULT
+import com.example.cxrglobal.EXTRA_AUTH_TOKEN
+import com.example.cxrglobal.GLOBAL_PKG
+import com.example.cxrglobal.LOG_TAG
 
 object AuthorizationHelper {
 
-    fun isHiRokidInstalled(context: Context): Boolean = try {
-        context.packageManager.getPackageInfo(GLOBAL_PKG, 0)
+    fun isRokidAppInstalled(activity: Activity): Boolean =
+        isAppInstalled(activity, GLOBAL_PKG)
+
+    fun isRequiredRokidAppInstalled(activity: Activity): Boolean =
+        isAppInstalled(activity, GLOBAL_PKG)
+
+    fun isAppInstalled(activity: Activity, packageName: String): Boolean = try {
+        activity.packageManager.getPackageInfo(packageName, 0)
         true
     } catch (e: PackageManager.NameNotFoundException) {
         false
     }
+
+    fun canLaunchApp(activity: Activity, packageName: String): Boolean =
+        activity.packageManager.getLaunchIntentForPackage(packageName) != null
 
     fun requestAuthorization(activity: Activity, requestCode: Int) {
         val intent = Intent(AUTH_ACTION).setPackage(GLOBAL_PKG)
@@ -25,7 +41,7 @@ object AuthorizationHelper {
             throw RuntimeException(
                 "Hi Rokid (global) アプリが認可をハンドリングできませんでした。" +
                     "$GLOBAL_PKG がインストール済みか確認してください。",
-                t
+                t,
             )
         }
     }

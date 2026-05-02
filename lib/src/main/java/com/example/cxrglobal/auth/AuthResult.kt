@@ -1,4 +1,4 @@
-package com.example.cxrglobal
+package com.example.cxrglobal.auth
 
 sealed class AuthResult {
     data class AuthSuccess(val token: String) : AuthResult()
