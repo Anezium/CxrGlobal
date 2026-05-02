@@ -85,68 +85,11 @@ Android 11+ で必須。`AndroidManifest.xml`:
 </queries>
 ```
 
-## 使い方 (最小スニペット)
+## 使い方
 
-本家 CXR-L SDK と同じ流れ: `requestAuthorization` → token 受取 → `configCXRSession` → `connect(token)` → 各機能呼び出し → `disconnect`。
+本家 CXR-L SDK と同じ流れで使える: `requestAuthorization` → token 受取 → `configCXRSession` → `connect(token)` → 各機能呼び出し → `disconnect`。
 
-```kotlin
-class MainActivity : AppCompatActivity() {
-    private lateinit var link: CXRLink
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        link = CXRLink(this)
-
-        link.setCXRLinkCbk(object : ICXRLinkCbk {
-            override fun onCXRLConnected(connected: Boolean) { /* bind 成立 */ }
-            override fun onGlassBtConnected(connected: Boolean) { /* グラス BT 状態 */ }
-            override fun onGlassAiAssistStart() {}
-            override fun onGlassAiAssistStop() {}
-        })
-        link.setCXRCustomViewCbk(/* ICustomViewCbk */)
-        link.setCXRAudioCbk(/* IAudioStreamCbk */)
-        link.setCXRImageCbk(/* IImageStreamCbk */)
-
-        // 認可フロー (Hi Rokid global の AuthorizationActivity を起動)
-        AuthorizationHelper.requestAuthorization(this, REQ_AUTH)
-    }
-
-    @Deprecated("Hi Rokid 側が onActivityResult で返すため本ライブラリでも採用")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQ_AUTH) return
-        when (val r = AuthorizationHelper.parseAuthorizationResult(resultCode, data)) {
-            is AuthResult.AuthSuccess -> {
-                link.configCXRSession(CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMVIEW))
-                link.connect(r.token)
-            }
-            AuthResult.AuthFail, AuthResult.AuthCancel -> { /* リトライ等 */ }
-        }
-    }
-
-    override fun onDestroy() {
-        link.disconnect()
-        super.onDestroy()
-    }
-
-    companion object { const val REQ_AUTH = 1001 }
-}
-```
-
-カスタムアプリ操作の場合は session を `CUSTOMAPP` で立てる:
-
-```kotlin
-link.configCXRSession(CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMAPP, "com.your.glass.app"))
-link.connect(token)
-// ...
-link.appStart("com.your.glass.app.MainActivity", object : IGlassAppCbk {
-    override fun onOpenAppResult(success: Boolean) { /* ... */ }
-})
-```
-
-`CUSTOMVIEW` セッション中は `customView*` だけ、`CUSTOMAPP` セッション中は `app*` だけが有効 (本家踏襲、不一致だと早期 return)。
-
-実装例は別リポジトリの Demo アプリを参照 (準備中)。
+実装例 (CustomView / CustomApp / Audio / Photo / CustomCmd の全機能) は **デモリポジトリ [TakanariShimbo/cxrlsample101-global](https://github.com/TakanariShimbo/cxrlsample101-global)** を参照。Rokid 公式 `CXRLSample` をグローバル版対応に書き換えた、本ライブラリの動く実装サンプル。
 
 ## トラブルシューティング
 
