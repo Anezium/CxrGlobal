@@ -184,6 +184,7 @@ class CXRLink(private val context: Context) {
         val intent = Intent(MEDIA_STREAM_ACTION)
             .setPackage(GLOBAL_PKG)
             .putExtra(EXTRA_AUTH_TOKEN, token)
+            .putExtra(EXTRA_AUTH_PACKAGE, context.packageName)
         bound = context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
         if (!bound) Log.w(LOG_TAG, "bindService returned false; is Hi Rokid (global) installed and authorized?")
         return bound
@@ -234,9 +235,23 @@ class CXRLink(private val context: Context) {
 
     fun stopAudioStream(): Boolean = tryCall { service?.stopAudioStream() ?: false } ?: false
 
+    fun setCommunicationDevice(): Boolean = invokeServiceNoArg("setCommunicationDevice")
+
+    fun clearCommunicationDevice(): Boolean = invokeServiceNoArg("clearCommunicationDevice")
+
+    fun sendExitEvent(): Boolean = invokeServiceNoArg("sendExitEvent")
+
     // ---- CustomCMD ----
     fun sendCustomCmd(key: String, payload: ByteArray): Int? =
         tryCall { service?.sendCustomCmd(key, payload) }
+
+    private fun invokeServiceNoArg(methodName: String): Boolean {
+        val svc = service ?: return false
+        return tryCall {
+            svc.javaClass.getMethod(methodName).invoke(svc)
+            true
+        } ?: false
+    }
 
     // ---- App control (CUSTOMAPP セッション必須, package は session 由来, cbk は per-call) ----
     fun appUploadAndInstall(filePath: String, cbk: IGlassAppCbk) {
