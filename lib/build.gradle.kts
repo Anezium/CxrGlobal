@@ -1,7 +1,7 @@
 plugins {
     // 親プロジェクト (claude-mobile-hud) と standalone (cxrglobal/) の双方で動くよう
     // 直接 id を使い version は build classpath / settings の pluginManagement から解決。
-    id("com.android.library")
+    alias(libs.plugins.android.library)
 }
 
 group = "com.example.cxrglobal"
