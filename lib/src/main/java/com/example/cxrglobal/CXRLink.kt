@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.os.DeadObjectException
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -42,8 +43,8 @@ class CXRLink(private val context: Context) {
             .onFailure { Log.w(LOG_TAG, "loadLibrary(cxr-sock-proto-jni) failed: ${it.message}") }
     }
 
-    private var service: IMediaStreamService? = null
-    private var bound = false
+    @Volatile private var service: IMediaStreamService? = null
+    @Volatile private var bound = false
     @Volatile private var glassConnected = false
 
     private var session: CxrDefs.CXRSession = CxrDefs.CXRSession(CxrDefs.CXRSessionType.NONE)
@@ -113,18 +114,42 @@ class CXRLink(private val context: Context) {
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            if (binder == null) {
+                markDisconnected("null binder", unbind = false)
+                return
+            }
             val svc = IMediaStreamService.Stub.asInterface(binder)
             service = svc
+            bound = true
             tryRegisterAllCallbacks(svc)
             glassConnected = tryCall { svc.isDeviceConnected } ?: false
+            Log.i(LOG_TAG, "service connected glassConnected=$glassConnected")
             linkCbk?.onCXRLConnected(true)
-            if (glassConnected) linkCbk?.onGlassBtConnected(true)
+            linkCbk?.onGlassBtConnected(glassConnected)
         }
         override fun onServiceDisconnected(name: ComponentName?) {
-            service = null
-            glassConnected = false
-            linkCbk?.onCXRLConnected(false)
+            markDisconnected("service disconnected", unbind = true)
         }
+        override fun onBindingDied(name: ComponentName?) {
+            markDisconnected("binding died", unbind = true)
+        }
+        override fun onNullBinding(name: ComponentName?) {
+            markDisconnected("null binding", unbind = true)
+        }
+    }
+
+    private fun markDisconnected(reason: String, unbind: Boolean) {
+        val wasBound = bound
+        val wasGlassConnected = glassConnected
+        service = null
+        bound = false
+        glassConnected = false
+        if (unbind && wasBound) {
+            runCatching { context.unbindService(serviceConnection) }
+        }
+        Log.w(LOG_TAG, "service disconnected: $reason")
+        linkCbk?.onCXRLConnected(false)
+        if (wasGlassConnected) linkCbk?.onGlassBtConnected(false)
     }
 
     private fun tryRegisterAllCallbacks(svc: IMediaStreamService) {
@@ -148,6 +173,9 @@ class CXRLink(private val context: Context) {
         block()
     } catch (t: Throwable) {
         Log.w(LOG_TAG, "AIDL call failed: ${t.message}")
+        if (t is DeadObjectException) {
+            markDisconnected("dead binder", unbind = true)
+        }
         null
     }
 
@@ -180,7 +208,11 @@ class CXRLink(private val context: Context) {
 
     // ---- connection lifecycle ----
     fun connect(token: String): Boolean {
-        if (bound) return true
+        if (bound && service != null) return true
+        if (bound) {
+            runCatching { context.unbindService(serviceConnection) }
+            bound = false
+        }
         val intent = Intent(MEDIA_STREAM_ACTION)
             .setPackage(GLOBAL_PKG)
             .putExtra(EXTRA_AUTH_TOKEN, token)
@@ -199,6 +231,8 @@ class CXRLink(private val context: Context) {
         service = null
         glassConnected = false
     }
+
+    fun isServiceConnected(): Boolean = bound && service != null
 
     fun isGlassBtConnected(): Boolean = glassConnected
 
