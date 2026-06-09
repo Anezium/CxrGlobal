@@ -14,6 +14,7 @@ import com.example.cxrglobal.callbacks.ICustomCmdCbk
 import com.example.cxrglobal.callbacks.ICustomViewCbk
 import com.example.cxrglobal.callbacks.IGlassAppCbk
 import com.example.cxrglobal.callbacks.IImageStreamCbk
+import com.rokid.cxr.Caps
 import com.rokid.sprite.aiapp.externalapp.IAiEventCallback
 import com.rokid.sprite.aiapp.externalapp.IAudioStreamCallback
 import com.rokid.sprite.aiapp.externalapp.ICustomCmdCallback
@@ -65,6 +66,15 @@ class CXRLink(private val context: Context) {
             glassConnected = connected
             linkCbk?.onGlassBtConnected(connected)
         }
+        override fun onDeviceInfoNotifiy(infoJson: String?) {
+            if (infoJson.isNullOrBlank()) return
+            runCatching { GlassInfo.fromJson(infoJson) }
+                .onSuccess { linkCbk?.onGlassDeviceInfo(it) }
+                .onFailure { Log.w(LOG_TAG, "parse glass info failed: ${it.message}") }
+        }
+        override fun onWearingStatusNotify(wearing: Boolean) {
+            linkCbk?.onGlassWearingStatus(wearing)
+        }
     }
     private val customViewStub = object : ICustomViewCallback.Stub() {
         override fun onCustomViewOpened() { customViewCbk?.onCustomViewOpened() }
@@ -93,6 +103,7 @@ class CXRLink(private val context: Context) {
         override fun onAiKeyDown() { linkCbk?.onGlassAiAssistStart() }
         override fun onAiKeyUp() { linkCbk?.onGlassAiAssistStop() }
         override fun onAiExit() { linkCbk?.onGlassAiAssistStop() }
+        override fun onInterruptAiWake(interrupted: Boolean) { linkCbk?.onGlassAiInterrupt(interrupted) }
         override fun onGlassAppResumeChange(from: String, to: String) {
             // 本家は (Boolean) のみで session の customAppPackageName と一致するかを返す。
             val target = session.customAppPackageName ?: return
@@ -269,6 +280,15 @@ class CXRLink(private val context: Context) {
 
     fun stopAudioStream(): Boolean = tryCall { service?.stopAudioStream() ?: false } ?: false
 
+    fun setInterruptAiWake(interrupt: Boolean): Boolean =
+        tryCall { service?.interruptAiWake(interrupt) ?: false } ?: false
+
+    fun getGlassDeviceInfo() {
+        tryCall { service?.getDeviceInfo() }
+    }
+
+    fun isWearingCheckOn(): Boolean = tryCall { service?.wearingSwitch ?: false } ?: false
+
     fun setCommunicationDevice(): Boolean = invokeServiceNoArg("setCommunicationDevice")
 
     fun clearCommunicationDevice(): Boolean = invokeServiceNoArg("clearCommunicationDevice")
@@ -278,6 +298,12 @@ class CXRLink(private val context: Context) {
     // ---- CustomCMD ----
     fun sendCustomCmd(key: String, payload: ByteArray): Int? =
         tryCall { service?.sendCustomCmd(key, payload) }
+
+    fun sendCustomCmd(key: String, payload: Caps): Int? =
+        sendCustomCmd(key, payload.serialize())
+
+    fun sendCustomCmd(key: String, payload: Caps, stream: ByteArray): Int? =
+        tryCall { service?.sendCustomCmdStream(key, payload.serialize(), stream) }
 
     private fun invokeServiceNoArg(methodName: String): Boolean {
         val svc = service ?: return false
@@ -326,6 +352,10 @@ class CXRLink(private val context: Context) {
     }
 
     fun appStart(activityName: String, cbk: IGlassAppCbk) {
+        appStart(activityName, interruptAiWake = false, cbk)
+    }
+
+    fun appStart(activityName: String, interruptAiWake: Boolean, cbk: IGlassAppCbk) {
         if (!requireSession(CxrDefs.CXRSessionType.CUSTOMAPP)) return
         glassAppCbk = cbk
         val pkg = session.customAppPackageName ?: return
@@ -336,6 +366,7 @@ class CXRLink(private val context: Context) {
             return
         }
         tryCall { svc.openApp(pkg, activityName, glassAppStub) }
+        if (interruptAiWake) setInterruptAiWake(true)
     }
 
     fun appStop(cbk: IGlassAppCbk) {
@@ -349,6 +380,7 @@ class CXRLink(private val context: Context) {
             return
         }
         tryCall { svc.stopApp(pkg, glassAppStub) }
+        setInterruptAiWake(false)
     }
 
     fun appIsInstalled(cbk: IGlassAppCbk) {

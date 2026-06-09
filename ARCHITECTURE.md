@@ -8,7 +8,7 @@ CxrGlobal の内部設計。利用方法は [README.md](README.md)。
 
 ### 公式 CXR-L SDK の制約
 
-`com.rokid.cxr:client-l:1.0.1` の AAR を逆コンパイルしたところ、SDK は **中国版 Hi Rokid (`com.rokid.sprite.aiapp`) のパッケージ名を 2 箇所でハードコード**していることが分かった:
+`com.rokid.cxr:client-l:1.0.3` の AAR を逆コンパイルしたところ、SDK は **中国版 Hi Rokid (`com.rokid.sprite.aiapp`) のパッケージ名を 2 箇所でハードコード**していることが分かった:
 
 - `AuthorizationHelper.requestAuthorization` が `Intent.setComponent(ComponentName("com.rokid.sprite.aiapp", "...AuthorizationActivity"))` で **明示的に中国版**を指す。呼び出し側で上書き不可能。
 - `ExternalAppClient`(`CXRLink.connect` の内部実装) が `Intent("...MEDIA_STREAM_SERVICE").setPackage("com.rokid.sprite.aiapp")` で `bindService`。同じく中国版固定。
@@ -72,7 +72,7 @@ SDK には `CXRLink.configCXRSession(CxrDefs.CXRSession)` という API があ�
 
 - **なぜ composite build か**: 利用側プロジェクトと並行して wrapper を編集することが多いため、publish 不要・編集即反映で動く形が便利。
 - **なぜ `dependencySubstitution` が必要か**: `includeBuild` だけだと CLI ビルドは通るが Android Studio のインデックスが座標を解決できず "Unresolved reference" エラーが出る。`dependencySubstitution` で座標 → プロジェクトの対応を明示することで IDE が解決できるようになる。
-- **将来 Maven 公開する場合**: `lib/build.gradle.kts` に `maven-publish` プラグインを足し、`publishToMavenLocal` で `~/.m2/repository` に publish。利用側は `mavenLocal()` を repository に追加すれば座標 (`com.example.cxrglobal:lib:0.1.0-SNAPSHOT`) で参照できる。
+- **将来 Maven 公開する場合**: `lib/build.gradle.kts` に `maven-publish` プラグインを足し、`publishToMavenLocal` で `~/.m2/repository` に publish。利用側は `mavenLocal()` を repository に追加すれば座標 (`com.example.cxrglobal:lib:0.2.0`) で参照できる。
 
 ## 3. ファイル構成
 
@@ -140,7 +140,7 @@ lib/src/main/java/com/example/cxrglobal/
 
 本 wrapper は本家 `CXRLink` を経由しないので、この暗黙ロードを引き継がないと利用側で `Caps().serialize()` が `UnsatisfiedLinkError` で落ちる。「本家と同じ書き味」が建前である以上、この保証責任は wrapper 側にある。よって `CXRLink` の `init { }` ブロックで本家と同じ `loadLibrary("cxr-sock-proto-jni")` を呼んでいる。
 
-`.so` 自体は `client-l:1.0.1` AAR の `jni/{arm64-v8a,armeabi-v7a}/` に同梱されているため、`implementation` 依存経由で利用側 APK にそのまま入る。利用側で追加の jniLibs 設定は不要。
+`.so` 自体は `client-l:1.0.3` / `cxr-service-bridge:1.0-20260522.063600-105` 由来で、16 KB page-size 対応済み。利用側で追加の jniLibs 設定は不要。
 
 ### スレッディング
 

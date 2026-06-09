@@ -35,7 +35,7 @@ Rokid Glasses 用 CXR-L (CXR の S/M/L tier のうち L) を **グローバル�
 
 ## オリジナルSDK
 
-本ライブラリのオリジナルは CXR-L SDK `com.rokid.cxr:client-l:1.0.1`。 ラップするために、オリジナルから低レイヤーの AIDL を借用している (transitive 非公開、利用側からは見えない)。
+本ライブラリのオリジナルは CXR-L SDK `com.rokid.cxr:client-l:1.0.3`。ラップするために、オリジナルから低レイヤーの AIDL を借用している (transitive 非公開、利用側からは見えない)。
 SDK の AIDL シグネチャや Hi Rokid アプリの公開 Action 名が変わった場合は本ライブラリも追従改修が必要。
 
 ## インストール
@@ -71,7 +71,7 @@ includeBuild("../CxrGlobal") {
 
 ```kotlin
 dependencies {
-    implementation("com.example.cxrglobal:lib:0.1.0-SNAPSHOT")
+    implementation("com.example.cxrglobal:lib:0.2.0")
 }
 ```
 

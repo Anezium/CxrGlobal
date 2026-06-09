@@ -5,13 +5,13 @@ plugins {
 }
 
 group = "com.example.cxrglobal"
-version = "0.1.0-SNAPSHOT"
+version = "0.2.0"
 
 android {
     namespace = "com.example.cxrglobal"
     // 親 (claude-mobile-hud:phone) と compileSdk を合わせるため 36 にダウングレード。
     // 元の 36.1 (minor api level) は AGP 9+ の機能で phone 側も追従が必要だが、
-    // CXR-L 1.0.1 は 36 で十分動くため downgrade で揃える方が摩擦が小さい。
+    // CXR-L 1.0.3 keeps the same compile surface while providing 16 KB page-size native libs.
     compileSdk = 36
 
     defaultConfig {
@@ -30,5 +30,5 @@ dependencies {
     //
     // **`api`** 必須: phone/glass モジュールが `com.rokid.cxr.Caps` を直接触る
     // (CapsFactoryImpl) ため、SDK の symbol を transitively expose する必要がある。
-    api("com.rokid.cxr:client-l:1.0.1")
+    api("com.rokid.cxr:client-l:1.0.3")
 }
