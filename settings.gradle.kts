@@ -17,10 +17,12 @@ plugins {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
-        maven { url = uri("https://maven.rokid.com/repository/maven-public/") }
         google()
         mavenCentral()
+        maven { url = uri("https://maven.rokid.com/repository/maven-public/") }
+        // Fallback mirror only; kept last so a flaky aliyun gateway cannot fail
+        // artifacts that the official repositories above already serve.
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
     }
 }
 
