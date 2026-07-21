@@ -289,11 +289,8 @@ class CXRLink(private val context: Context) {
 
     fun isWearingCheckOn(): Boolean = tryCall { service?.wearingSwitch ?: false } ?: false
 
-    fun setCommunicationDevice(): Boolean = invokeServiceNoArg("setCommunicationDevice")
-
-    fun clearCommunicationDevice(): Boolean = invokeServiceNoArg("clearCommunicationDevice")
-
-    fun sendExitEvent(): Boolean = invokeServiceNoArg("sendExitEvent")
+    fun sendExit(playSound: Boolean): Boolean =
+        tryCall { service?.sendExit(playSound) ?: false } ?: false
 
     // ---- CustomCMD ----
     fun sendCustomCmd(key: String, payload: ByteArray): Int? =
@@ -304,14 +301,6 @@ class CXRLink(private val context: Context) {
 
     fun sendCustomCmd(key: String, payload: Caps, stream: ByteArray): Int? =
         tryCall { service?.sendCustomCmdStream(key, payload.serialize(), stream) }
-
-    private fun invokeServiceNoArg(methodName: String): Boolean {
-        val svc = service ?: return false
-        return tryCall {
-            svc.javaClass.getMethod(methodName).invoke(svc)
-            true
-        } ?: false
-    }
 
     // ---- App control (CUSTOMAPP セッション必須, package は session 由来, cbk は per-call) ----
     fun appUploadAndInstall(filePath: String, cbk: IGlassAppCbk) {
