@@ -75,6 +75,9 @@ class CXRLink(private val context: Context) {
         override fun onWearingStatusNotify(wearing: Boolean) {
             linkCbk?.onGlassWearingStatus(wearing)
         }
+        override fun onCurrentScenesNotify(scenesJson: String?) {
+            linkCbk?.onGlassCurrentScenesNotify(scenesJson)
+        }
     }
     private val customViewStub = object : ICustomViewCallback.Stub() {
         override fun onCustomViewOpened() { customViewCbk?.onCustomViewOpened() }
@@ -274,6 +277,12 @@ class CXRLink(private val context: Context) {
     // ---- Photo / Audio (セッション制限なし) ----
     fun takePhoto(width: Int, height: Int, quality: Int): Boolean =
         tryCall { service?.takePhoto(width, height, quality) ?: false } ?: false
+
+    fun setBrightness(level: Int): Boolean =
+        tryCall { service?.setBrightness(level) ?: false } ?: false
+
+    fun setVolume(level: Int): Boolean =
+        tryCall { service?.setVolume(level) ?: false } ?: false
 
     fun startAudioStream(codeType: Int): Boolean =
         tryCall { service?.startAudioStream(codeType) ?: false } ?: false

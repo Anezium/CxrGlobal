@@ -7,6 +7,7 @@ interface ICXRLinkCbk {
     fun onGlassBtConnected(connected: Boolean) {}
     fun onGlassDeviceInfo(info: GlassInfo) {}
     fun onGlassWearingStatus(wearing: Boolean) {}
+    fun onGlassCurrentScenesNotify(scenesJson: String?) {}
     fun onGlassAiAssistStart() {}
     fun onGlassAiAssistStop() {}
     fun onGlassAiInterrupt(interrupted: Boolean) {}

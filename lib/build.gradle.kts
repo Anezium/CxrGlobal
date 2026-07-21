@@ -30,5 +30,5 @@ dependencies {
     //
     // **`api`** 必須: phone/glass モジュールが `com.rokid.cxr.Caps` を直接触る
     // (CapsFactoryImpl) ため、SDK の symbol を transitively expose する必要がある。
-    api("com.rokid.cxr:client-l:1.0.3")
+    api("com.rokid.cxr:client-l:1.1.0")
 }
