@@ -10,16 +10,16 @@ import com.example.cxrglobal.AUTH_RESULT_CANCEL
 import com.example.cxrglobal.AUTH_RESULT_SUCCESS
 import com.example.cxrglobal.EXTRA_AUTH_RESULT
 import com.example.cxrglobal.EXTRA_AUTH_TOKEN
-import com.example.cxrglobal.GLOBAL_PKG
+import com.example.cxrglobal.HI_ROKID_PACKAGE
 import com.example.cxrglobal.LOG_TAG
 
 object AuthorizationHelper {
 
     fun isRokidAppInstalled(activity: Activity): Boolean =
-        isAppInstalled(activity, GLOBAL_PKG)
+        isAppInstalled(activity, HI_ROKID_PACKAGE)
 
     fun isRequiredRokidAppInstalled(activity: Activity): Boolean =
-        isAppInstalled(activity, GLOBAL_PKG)
+        isAppInstalled(activity, HI_ROKID_PACKAGE)
 
     fun isAppInstalled(activity: Activity, packageName: String): Boolean = try {
         activity.packageManager.getPackageInfo(packageName, 0)
@@ -32,15 +32,19 @@ object AuthorizationHelper {
         activity.packageManager.getLaunchIntentForPackage(packageName) != null
 
     fun requestAuthorization(activity: Activity, requestCode: Int) {
-        val intent = Intent(AUTH_ACTION).setPackage(GLOBAL_PKG)
+        requestAuthorization(activity, requestCode, HI_ROKID_PACKAGE)
+    }
+
+    fun requestAuthorization(activity: Activity, requestCode: Int, hostPackageName: String) {
+        val intent = Intent(AUTH_ACTION).setPackage(hostPackageName)
         try {
             @Suppress("DEPRECATION")
             activity.startActivityForResult(intent, requestCode)
         } catch (t: Throwable) {
             Log.e(LOG_TAG, "requestAuthorization failed", t)
             throw RuntimeException(
-                "Hi Rokid (global) アプリが認可をハンドリングできませんでした。" +
-                    "$GLOBAL_PKG がインストール済みか確認してください。",
+                "Rokid host app could not handle authorization. " +
+                    "Check that $hostPackageName is installed.",
                 t,
             )
         }

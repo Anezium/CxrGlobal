@@ -1,21 +1,21 @@
 # CxrGlobal
 
-Rokid Glasses 用 CXR-L (CXR の S/M/L tier のうち L) を **グローバル版 Hi Rokid アプリ**経由で使うための薄いラッパーライブラリ。
+Rokid Glasses 用 CXR-L (CXR の S/M/L tier のうち L) を Rokid companion app 経由で使うための薄いラッパーライブラリ。デフォルトは従来通り **グローバル版 Hi Rokid**。
 
 ## 背景
 
 スマホ側の Hi Rokid アプリには地域別に 2 つの配布があり、パッケージ名が異なる:
 
-- **グローバル版**: `com.rokid.sprite.global.aiapp` — グローバルユーザー向け。本ライブラリの対象。
-- **中国版**: `com.rokid.sprite.aiapp` — 中国国内向け。初回利用時に中国アカウント作成が必要。
+- **グローバル版**: `com.rokid.sprite.global.aiapp` — グローバルユーザー向け。デフォルト host。
+- **中国版**: `com.rokid.sprite.aiapp` — 中国国内向け。利用側が明示的に host package として指定可能。
 
-公式 CXR-L SDK (`com.rokid.cxr:client-l`) は **中国版にパッケージ名がハードコード**されていて、グローバル版環境ではそのままでは動かない。本ライブラリは公式 SDK の上位 API を使わず、より低レイヤーで Hi Rokid アプリと直接通信することでグローバル版に対応している。利用側からは公式 SDK 互換の薄い API として使える。詳細 (バイパスの仕組み / 内部設計) は [ARCHITECTURE.md](ARCHITECTURE.md)。
+公式 CXR-L SDK (`com.rokid.cxr:client-l`) は **中国版にパッケージ名がハードコード**されていて、グローバル版環境ではそのままでは動かない。本ライブラリは公式 SDK の上位 API を使わず、より低レイヤーで Rokid companion app と直接通信することで host package を選べるようにしている。利用側からは公式 SDK 互換の薄い API として使える。詳細 (バイパスの仕組み / 内部設計) は [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ## 提供する機能
 
 公式 CXR-L SDK (`com.rokid.cxr.link.CXRLink`) と **同じクラス名 / メソッド名 / セッション概念 / コールバック setter** を持つ。利用側は本家 SDK と同じ感覚で書ける (詳細な API シェイプは [ARCHITECTURE.md](ARCHITECTURE.md))。
 
-- 認可フロー: グローバル版 Hi Rokid の AuthorizationActivity を呼び出し → token 取得 (`AuthorizationHelper`)
+- 認可フロー: 選択した Rokid host の AuthorizationActivity を呼び出し → token 取得 (`AuthorizationHelper`)
 - AIDL バインディング: `IMediaStreamService` への接続 / 切断 (`CXRLink#connect` / `disconnect`)
 - セッション管理: `configCXRSession(CxrDefs.CXRSession(...))` で `CUSTOMVIEW` / `CUSTOMAPP` を宣言
 - CustomView: `customViewOpen` / `customViewUpdate` / `customViewClose` / `customViewSetIcons` / 状態取得
@@ -31,12 +31,12 @@ Rokid Glasses 用 CXR-L (CXR の S/M/L tier のうち L) を **グローバル�
 | --------------- | --------------------------------------------------------------- | ------------------------------------------------------ |
 | スマホ          | Android (minSdk 31 / compileSdk 36)                             | Google Pixel 8 / Android 16 (SDK 36)                   |
 | グラス          | ペアリング済みであること                                        | Rokid Glasses / YodaOS SPRITE 1.18.007-20260427-150201 |
-| Hi Rokid アプリ | グローバル版 (`com.rokid.sprite.global.aiapp`) インストール済み | G1.5.9.0408 (versionCode 10050009)                     |
+| Rokid host app  | グローバル版 (`com.rokid.sprite.global.aiapp`) または中国版 (`com.rokid.sprite.aiapp`) | Global Hi Rokid G1.5.9.0408 (versionCode 10050009) |
 
 ## オリジナルSDK
 
 本ライブラリのオリジナルは CXR-L SDK `com.rokid.cxr:client-l:1.0.3`。ラップするために、オリジナルから低レイヤーの AIDL を借用している (transitive 非公開、利用側からは見えない)。
-SDK の AIDL シグネチャや Hi Rokid アプリの公開 Action 名が変わった場合は本ライブラリも追従改修が必要。
+SDK の AIDL シグネチャや Rokid host app の公開 Action 名が変わった場合は本ライブラリも追従改修が必要。
 
 ## インストール
 
@@ -82,18 +82,19 @@ Android 11+ で必須。`AndroidManifest.xml`:
 ```xml
 <queries>
     <package android:name="com.rokid.sprite.global.aiapp" />
+    <package android:name="com.rokid.sprite.aiapp" />
 </queries>
 ```
 
 ## 使い方
 
-本家 CXR-L SDK と同じ流れで使える: `requestAuthorization` → token 受取 → `configCXRSession` → `connect(token)` → 各機能呼び出し → `disconnect`。
+本家 CXR-L SDK と同じ流れで使える: `requestAuthorization` → token 受取 → `configCXRSession` → `connect(token)` → 各機能呼び出し → `disconnect`。`CXRLink(context)` は従来通り Hi Rokid global を使う。別 host を使う場合は `CXRLink(context, hostPackageName)` を使う。
 
 実装例 (CustomView / CustomApp / Audio / Photo / CustomCmd の全機能) は **デモリポジトリ [TakanariShimbo/cxrlsample101-global](https://github.com/TakanariShimbo/cxrlsample101-global)** を参照。Rokid 公式 `CXRLSample` をグローバル版対応に書き換えた、本ライブラリの動く実装サンプル。
 
 ## トラブルシューティング
 
 - `AuthorizationHelper.isRokidAppInstalled(activity)` が `false`: グローバル版 Hi Rokid 未インストール、または `<queries>` の登録漏れ。
-- `link.connect(token)` 後に `onCXRLConnected(true)` が来ない: token の期限切れか、Hi Rokid Service 側で auth が通っていない。再度 `requestAuthorization` する。
+- `link.connect(token)` 後に `onCXRLConnected(true)` が来ない: token の期限切れか、選択した Rokid host の Service 側で auth が通っていない。再度 `requestAuthorization` する。
 - `customViewOpen` / `appStart` 等がそのまま return する: `configCXRSession(...)` での宣言が無いか不一致。`CUSTOMVIEW` 系メソッドは `CXRSessionType.CUSTOMVIEW`、`app*` 系は `CUSTOMAPP` (+ `customAppPackageName`) のセッション宣言が必須 (本家踏襲)。
 - ログタグは `CXRGlobal`。`adb logcat -d -s CXRGlobal:*` で wrapper 内部のログだけ抽出できる。

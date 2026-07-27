@@ -1,6 +1,7 @@
 package com.example.cxrglobal
 
-internal const val GLOBAL_PKG = "com.rokid.sprite.global.aiapp"
+const val ROKID_AI_PACKAGE = "com.rokid.sprite.aiapp"
+const val HI_ROKID_PACKAGE = "com.rokid.sprite.global.aiapp"
 internal const val AUTH_ACTION = "com.rokid.sprite.aiapp.externalapp.AUTHORIZATION"
 internal const val MEDIA_STREAM_ACTION = "com.rokid.sprite.aiapp.externalapp.MEDIA_STREAM_SERVICE"
 internal const val EXTRA_AUTH_RESULT = "auth_result"

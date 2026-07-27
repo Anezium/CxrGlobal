@@ -26,13 +26,16 @@ import com.rokid.sprite.aiapp.externalapp.IMediaStreamService
 import java.io.File
 
 /**
- * Hi Rokid (global) の MediaStreamService に直接バインドして CXR-L 機能を提供する。
+ * Rokid companion app の MediaStreamService に直接バインドして CXR-L 機能を提供する。
  *
  * 公式 CXR-L SDK の `com.rokid.cxr.link.CXRLink` と同じ API シェイプ (クラス名 / メソッド名 /
- * セッション概念 / コールバック setter) を持つ。中国版固定の Intent をグローバル版に振り直して
+ * セッション概念 / コールバック setter) を持つ。利用側が指定した host package に Intent を振り直して
  * AIDL を直接叩いているだけで、利用側コードは本家 SDK と同じ感覚で書ける。
  */
-class CXRLink(private val context: Context) {
+class CXRLink(
+    private val context: Context,
+    private val hostPackageName: String = HI_ROKID_PACKAGE,
+) {
 
     init {
         // 本家 CXRLink(Context) のコンストラクタが System.loadLibrary("cxr-sock-proto-jni") を
@@ -228,11 +231,13 @@ class CXRLink(private val context: Context) {
             bound = false
         }
         val intent = Intent(MEDIA_STREAM_ACTION)
-            .setPackage(GLOBAL_PKG)
+            .setPackage(hostPackageName)
             .putExtra(EXTRA_AUTH_TOKEN, token)
             .putExtra(EXTRA_AUTH_PACKAGE, context.packageName)
         bound = context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
-        if (!bound) Log.w(LOG_TAG, "bindService returned false; is Hi Rokid (global) installed and authorized?")
+        if (!bound) {
+            Log.w(LOG_TAG, "bindService returned false; is $hostPackageName installed and authorized?")
+        }
         return bound
     }
 
