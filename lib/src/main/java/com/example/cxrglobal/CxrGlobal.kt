@@ -10,3 +10,7 @@ internal const val AUTH_RESULT_SUCCESS = 2001
 internal const val AUTH_RESULT_FAIL = 2002
 internal const val AUTH_RESULT_CANCEL = 2003
 internal const val LOG_TAG = "CXRGlobal"
+
+// The value client-l 1.1.2 reports on every bind; this wrapper implements the same callback
+// surface, including `onDisconnectByServer`.
+internal const val CXRL_CLIENT_SDK_VERSION = 112

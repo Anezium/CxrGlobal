@@ -5,7 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.DeadObjectException
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.example.cxrglobal.callbacks.IAudioStreamCbk
@@ -44,9 +46,136 @@ class CXRLink(private val context: Context) {
             .onFailure { Log.w(LOG_TAG, "loadLibrary(cxr-sock-proto-jni) failed: ${it.message}") }
     }
 
-    @Volatile private var service: IMediaStreamService? = null
-    @Volatile private var bound = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // One bindService call, with its own AIDL callback adapters. A bind is retired the moment it is
+    // replaced, torn down, closed by the service or hits a dead binder, from any thread. Its events
+    // are forwarded only while it is still the current bind. Scene reports and AI key events go
+    // through the main thread, where teardown runs, so none from a bind that is over can follow its
+    // link-down; everything else is forwarded on the binder thread it arrived on. A retired bind
+    // never reports the link up, unbinds its successor, or forwards an event.
+    private inner class Bind : ServiceConnection {
+        @Volatile var retired = false
+        @Volatile var closedByServer = false
+        @Volatile var service: IMediaStreamService? = null
+        var reportedUp = false
+
+        fun isCurrent(): Boolean = !retired && current === this
+
+        private fun onMain(event: () -> Unit) {
+            mainHandler.post { if (isCurrent()) deliver(event) }
+        }
+
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) =
+            onBindConnected(this, binder)
+        override fun onServiceDisconnected(name: ComponentName?) = retire(this, "service disconnected")
+        override fun onBindingDied(name: ComponentName?) = retire(this, "binding died")
+        override fun onNullBinding(name: ComponentName?) = retire(this, "null binding")
+
+        // ---- AIDL Stub アダプタ (利用側に com.rokid.* を見せないための一段噛み) ----
+
+        val deviceStatus = object : IDeviceStatusCallback.Stub() {
+            override fun onDeviceConnectChanged(connected: Boolean) {
+                if (!isCurrent()) return
+                glassConnected = connected
+                linkCbk?.onGlassBtConnected(connected)
+            }
+            override fun onDeviceInfoNotifiy(infoJson: String?) {
+                if (!isCurrent() || infoJson.isNullOrBlank()) return
+                runCatching { GlassInfo.fromJson(infoJson) }
+                    .onSuccess { linkCbk?.onGlassDeviceInfo(it) }
+                    .onFailure { Log.w(LOG_TAG, "parse glass info failed: ${it.message}") }
+            }
+            override fun onWearingStatusNotify(wearing: Boolean) {
+                if (isCurrent()) linkCbk?.onGlassWearingStatus(wearing)
+            }
+            override fun onCurrentScenesNotify(scenesJson: String?) = onMain {
+                linkCbk?.onGlassCurrentScenesNotify(scenesJson)
+            }
+            override fun onDisconnectByServer() {
+                // Mirrors client-l 1.1.2: unbind only, with no call back into the service from
+                // the thread it is delivering this callback on.
+                if (retired) return
+                closedByServer = true
+                retire(this@Bind, "disconnected by server")
+            }
+        }
+        val customView = object : ICustomViewCallback.Stub() {
+            override fun onCustomViewOpened() { if (isCurrent()) customViewCbk?.onCustomViewOpened() }
+            override fun onCustomViewUpdated() { if (isCurrent()) customViewCbk?.onCustomViewUpdated() }
+            override fun onCustomViewClosed() { if (isCurrent()) customViewCbk?.onCustomViewClosed() }
+            override fun onCustomViewIconsSent() { if (isCurrent()) customViewCbk?.onCustomViewIconsSent() }
+            override fun onCustomViewError(code: Int, msg: String?) {
+                if (isCurrent()) customViewCbk?.onCustomViewError(code, msg)
+            }
+        }
+        val audio = object : IAudioStreamCallback.Stub() {
+            override fun onAudioReceived(data: ByteArray, offset: Int, length: Int) {
+                if (isCurrent()) audioStreamCbk?.onAudioReceived(data, offset, length)
+            }
+            override fun onAudioError(code: Int, msg: String?) {
+                if (isCurrent()) audioStreamCbk?.onAudioError(code, msg)
+            }
+            override fun onAudioStreamStateChanged(started: Boolean) {
+                if (isCurrent()) audioStreamCbk?.onAudioStreamStateChanged(started)
+            }
+        }
+        val image = object : IImageStreamCallback.Stub() {
+            override fun onImageReceived(data: ByteArray) {
+                if (isCurrent()) imageStreamCbk?.onImageReceived(data)
+            }
+            override fun onImageError(code: Int, msg: String?) {
+                if (isCurrent()) imageStreamCbk?.onImageError(code, msg)
+            }
+        }
+        val customCmd = object : ICustomCmdCallback.Stub() {
+            override fun onCustomCmdResult(key: String, payload: ByteArray) {
+                if (isCurrent()) customCmdCbk?.onCustomCmdResult(key, payload)
+            }
+        }
+        val aiEvent = object : IAiEventCallback.Stub() {
+            override fun onAiKeyDown() = onMain { linkCbk?.onGlassAiAssistStart() }
+            override fun onAiKeyUp() = onMain { linkCbk?.onGlassAiAssistStop() }
+            override fun onAiExit() = onMain { linkCbk?.onGlassAiAssistStop() }
+            override fun onInterruptAiWake(interrupted: Boolean) = onMain {
+                linkCbk?.onGlassAiInterrupt(interrupted)
+            }
+            override fun onGlassAppResumeChange(from: String, to: String) {
+                if (!isCurrent()) return
+                // 本家は (Boolean) のみで session の customAppPackageName と一致するかを返す。
+                val target = session.customAppPackageName ?: return
+                val wasMine = (from == target)
+                val isMine = (to == target)
+                if (wasMine != isMine) glassAppCbk?.onGlassAppResume(isMine)
+            }
+        }
+        val glassApp = object : IGlassAppCallback.Stub() {
+            override fun onInstallAppResult(success: Boolean) {
+                if (isCurrent()) glassAppCbk?.onInstallAppResult(success)
+            }
+            override fun onUnInstallAppResult(success: Boolean) {
+                if (isCurrent()) glassAppCbk?.onUnInstallAppResult(success)
+            }
+            override fun onOpenAppResult(success: Boolean) {
+                if (isCurrent()) glassAppCbk?.onOpenAppResult(success)
+            }
+            override fun onStopAppResult(success: Boolean) {
+                if (isCurrent()) glassAppCbk?.onStopAppResult(success)
+            }
+            override fun onQueryAppResult(pkg: String, installed: Boolean) {
+                // 本家互換のため pkg は捨てる (session で 1 アプリに絞る前提)。
+                if (isCurrent()) glassAppCbk?.onQueryAppResult(installed)
+            }
+        }
+    }
+
+    @Volatile private var current: Bind? = null
     @Volatile private var glassConnected = false
+
+    private val service: IMediaStreamService?
+        get() = liveBind()?.service
+
+    private fun liveBind(): Bind? = current?.takeIf { !it.retired }
 
     private var session: CxrDefs.CXRSession = CxrDefs.CXRSession(CxrDefs.CXRSessionType.NONE)
 
@@ -59,139 +188,91 @@ class CXRLink(private val context: Context) {
     // IGlassAppCbk は本家踏襲で per-call。各 app* 呼び出しで上書きされる。
     private var glassAppCbk: IGlassAppCbk? = null
 
-    // ---- AIDL Stub アダプタ (利用側に com.rokid.* を見せないための一段噛み) ----
+    // Main thread, like every ServiceConnection callback. Each setup call runs only while the bind
+    // is still current; a server disconnect or dead binder during setup stops it, and the bind is
+    // then torn down without ever having reported the link up.
+    private fun onBindConnected(bind: Bind, binder: IBinder?) {
+        if (!bind.isCurrent()) return
+        if (binder == null) {
+            retire(bind, "null binder")
+            return
+        }
+        val svc = IMediaStreamService.Stub.asInterface(binder)
+        bind.service = svc
+        val setup: List<() -> Any?> = listOf(
+            { svc.sendSdkVersion(CXRL_CLIENT_SDK_VERSION) },
+            { svc.registerDeviceStatusCallback(bind.deviceStatus) },
+            { svc.registerCustomViewCallback(bind.customView) },
+            { svc.registerAudioCallback(bind.audio) },
+            { svc.registerImageCallback(bind.image) },
+            { svc.registerCustomCmdCallback(bind.customCmd) },
+            { svc.registAiEventCallback(bind.aiEvent) },
+        )
+        for (call in setup) {
+            if (!bind.isCurrent()) return
+            callFor(bind, call)
+        }
+        if (!bind.isCurrent()) return
+        val deviceConnected = callFor(bind) { svc.isDeviceConnected } ?: false
+        if (!bind.isCurrent()) return
+        glassConnected = deviceConnected
+        bind.reportedUp = true
+        Log.i(LOG_TAG, "service connected glassConnected=$glassConnected")
+        deliver { linkCbk?.onCXRLConnected(true) }
+        deliver { linkCbk?.onGlassBtConnected(glassConnected) }
+    }
 
-    private val deviceStatusStub = object : IDeviceStatusCallback.Stub() {
-        override fun onDeviceConnectChanged(connected: Boolean) {
-            glassConnected = connected
-            linkCbk?.onGlassBtConnected(connected)
-        }
-        override fun onDeviceInfoNotifiy(infoJson: String?) {
-            if (infoJson.isNullOrBlank()) return
-            runCatching { GlassInfo.fromJson(infoJson) }
-                .onSuccess { linkCbk?.onGlassDeviceInfo(it) }
-                .onFailure { Log.w(LOG_TAG, "parse glass info failed: ${it.message}") }
-        }
-        override fun onWearingStatusNotify(wearing: Boolean) {
-            linkCbk?.onGlassWearingStatus(wearing)
-        }
-        override fun onCurrentScenesNotify(scenesJson: String?) {
-            linkCbk?.onGlassCurrentScenesNotify(scenesJson)
-        }
+    // On a binder thread an escaping exception is caught by Binder; on the main looper it would end
+    // the process, so callbacks delivered there are contained the same way.
+    private fun deliver(callback: () -> Unit) {
+        runCatching(callback).onFailure { Log.w(LOG_TAG, "callback failed", it) }
     }
-    private val customViewStub = object : ICustomViewCallback.Stub() {
-        override fun onCustomViewOpened() { customViewCbk?.onCustomViewOpened() }
-        override fun onCustomViewUpdated() { customViewCbk?.onCustomViewUpdated() }
-        override fun onCustomViewClosed() { customViewCbk?.onCustomViewClosed() }
-        override fun onCustomViewIconsSent() { customViewCbk?.onCustomViewIconsSent() }
-        override fun onCustomViewError(code: Int, msg: String?) { customViewCbk?.onCustomViewError(code, msg) }
-    }
-    private val audioStub = object : IAudioStreamCallback.Stub() {
-        override fun onAudioReceived(data: ByteArray, offset: Int, length: Int) {
-            audioStreamCbk?.onAudioReceived(data, offset, length)
-        }
-        override fun onAudioError(code: Int, msg: String?) { audioStreamCbk?.onAudioError(code, msg) }
-        override fun onAudioStreamStateChanged(started: Boolean) { audioStreamCbk?.onAudioStreamStateChanged(started) }
-    }
-    private val imageStub = object : IImageStreamCallback.Stub() {
-        override fun onImageReceived(data: ByteArray) { imageStreamCbk?.onImageReceived(data) }
-        override fun onImageError(code: Int, msg: String?) { imageStreamCbk?.onImageError(code, msg) }
-    }
-    private val customCmdStub = object : ICustomCmdCallback.Stub() {
-        override fun onCustomCmdResult(key: String, payload: ByteArray) {
-            customCmdCbk?.onCustomCmdResult(key, payload)
-        }
-    }
-    private val aiEventStub = object : IAiEventCallback.Stub() {
-        override fun onAiKeyDown() { linkCbk?.onGlassAiAssistStart() }
-        override fun onAiKeyUp() { linkCbk?.onGlassAiAssistStop() }
-        override fun onAiExit() { linkCbk?.onGlassAiAssistStop() }
-        override fun onInterruptAiWake(interrupted: Boolean) { linkCbk?.onGlassAiInterrupt(interrupted) }
-        override fun onGlassAppResumeChange(from: String, to: String) {
-            // 本家は (Boolean) のみで session の customAppPackageName と一致するかを返す。
-            val target = session.customAppPackageName ?: return
-            val wasMine = (from == target)
-            val isMine = (to == target)
-            if (wasMine != isMine) glassAppCbk?.onGlassAppResume(isMine)
-        }
-    }
-    private val glassAppStub = object : IGlassAppCallback.Stub() {
-        override fun onInstallAppResult(success: Boolean) { glassAppCbk?.onInstallAppResult(success) }
-        override fun onUnInstallAppResult(success: Boolean) { glassAppCbk?.onUnInstallAppResult(success) }
-        override fun onOpenAppResult(success: Boolean) { glassAppCbk?.onOpenAppResult(success) }
-        override fun onStopAppResult(success: Boolean) { glassAppCbk?.onStopAppResult(success) }
-        override fun onQueryAppResult(pkg: String, installed: Boolean) {
-            // 本家互換のため pkg は捨てる (session で 1 アプリに絞る前提)。
-            glassAppCbk?.onQueryAppResult(installed)
+
+    private fun retire(bind: Bind, reason: String) {
+        bind.retired = true
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            finishRetire(bind, reason)
+        } else {
+            mainHandler.post { finishRetire(bind, reason) }
         }
     }
 
-    private val serviceConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            if (binder == null) {
-                markDisconnected("null binder", unbind = false)
-                return
-            }
-            val svc = IMediaStreamService.Stub.asInterface(binder)
-            service = svc
-            bound = true
-            tryRegisterAllCallbacks(svc)
-            glassConnected = tryCall { svc.isDeviceConnected } ?: false
-            Log.i(LOG_TAG, "service connected glassConnected=$glassConnected")
-            linkCbk?.onCXRLConnected(true)
-            linkCbk?.onGlassBtConnected(glassConnected)
-        }
-        override fun onServiceDisconnected(name: ComponentName?) {
-            markDisconnected("service disconnected", unbind = true)
-        }
-        override fun onBindingDied(name: ComponentName?) {
-            markDisconnected("binding died", unbind = true)
-        }
-        override fun onNullBinding(name: ComponentName?) {
-            markDisconnected("null binding", unbind = true)
-        }
-    }
-
-    private fun markDisconnected(reason: String, unbind: Boolean) {
-        val wasBound = bound
+    // Main thread only. Runs once per bind: whoever clears `current` first owns the teardown.
+    private fun finishRetire(bind: Bind, reason: String) {
+        if (current !== bind) return
+        current = null
         val wasGlassConnected = glassConnected
-        service = null
-        bound = false
         glassConnected = false
-        if (unbind && wasBound) {
-            runCatching { context.unbindService(serviceConnection) }
+        runCatching { context.unbindService(bind) }
+        if (bind.reportedUp) {
+            Log.w(LOG_TAG, "service disconnected: $reason")
+        } else {
+            Log.i(LOG_TAG, "pending bind dropped: $reason")
         }
-        Log.w(LOG_TAG, "service disconnected: $reason")
-        linkCbk?.onCXRLConnected(false)
-        if (wasGlassConnected) linkCbk?.onGlassBtConnected(false)
+        if (bind.closedByServer) deliver { linkCbk?.onCXRLDisconnectedByServer() }
+        if (!bind.reportedUp) return
+        deliver { linkCbk?.onCXRLConnected(false) }
+        if (wasGlassConnected) deliver { linkCbk?.onGlassBtConnected(false) }
     }
 
-    private fun tryRegisterAllCallbacks(svc: IMediaStreamService) {
-        runCatching { svc.registerDeviceStatusCallback(deviceStatusStub) }
-        runCatching { svc.registerCustomViewCallback(customViewStub) }
-        runCatching { svc.registerAudioCallback(audioStub) }
-        runCatching { svc.registerImageCallback(imageStub) }
-        runCatching { svc.registerCustomCmdCallback(customCmdStub) }
-        runCatching { svc.registAiEventCallback(aiEventStub) }
-    }
-    private fun tryUnregisterAllCallbacks(svc: IMediaStreamService) {
-        runCatching { svc.unregisterDeviceStatusCallback(deviceStatusStub) }
-        runCatching { svc.unregisterCustomViewCallback(customViewStub) }
-        runCatching { svc.unregisterAudioCallback(audioStub) }
-        runCatching { svc.unregisterImageCallback(imageStub) }
-        runCatching { svc.unregisterCustomCmdCallback(customCmdStub) }
-        runCatching { svc.unregistAiEventCallback(aiEventStub) }
+    private fun tryUnregisterAllCallbacks(bind: Bind, svc: IMediaStreamService) {
+        runCatching { svc.unregisterDeviceStatusCallback(bind.deviceStatus) }
+        runCatching { svc.unregisterCustomViewCallback(bind.customView) }
+        runCatching { svc.unregisterAudioCallback(bind.audio) }
+        runCatching { svc.unregisterImageCallback(bind.image) }
+        runCatching { svc.unregisterCustomCmdCallback(bind.customCmd) }
+        runCatching { svc.unregistAiEventCallback(bind.aiEvent) }
     }
 
-    private inline fun <T> tryCall(block: () -> T): T? = try {
+    private inline fun <T> callFor(bind: Bind?, block: () -> T): T? = try {
         block()
     } catch (t: Throwable) {
         Log.w(LOG_TAG, "AIDL call failed: ${t.message}")
-        if (t is DeadObjectException) {
-            markDisconnected("dead binder", unbind = true)
-        }
+        if (t is DeadObjectException && bind != null) retire(bind, "dead binder")
         null
     }
+
+    private inline fun <T> tryCall(block: () -> T): T? = callFor(current, block)
 
     private fun requireSession(required: CxrDefs.CXRSessionType): Boolean {
         if (session.sessionType != required) {
@@ -220,33 +301,43 @@ class CXRLink(private val context: Context) {
         return true
     }
 
-    // ---- connection lifecycle ----
+    // ---- connection lifecycle (call on the main thread) ----
     fun connect(token: String): Boolean {
-        if (bound && service != null) return true
-        if (bound) {
-            runCatching { context.unbindService(serviceConnection) }
-            bound = false
+        if (service != null) return true
+        // A bind still pending, or retired on a binder thread with its teardown queued, is finished
+        // here, so its loss is reported before the replacement exists.
+        current?.let { stale ->
+            stale.retired = true
+            finishRetire(stale, "replaced")
         }
         val intent = Intent(MEDIA_STREAM_ACTION)
             .setPackage(GLOBAL_PKG)
             .putExtra(EXTRA_AUTH_TOKEN, token)
             .putExtra(EXTRA_AUTH_PACKAGE, context.packageName)
-        bound = context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
-        if (!bound) Log.w(LOG_TAG, "bindService returned false; is Hi Rokid (global) installed and authorized?")
+        val bind = Bind()
+        current = bind
+        val bound = runCatching {
+            context.bindService(intent, bind, Context.BIND_AUTO_CREATE)
+        }.getOrDefault(false)
+        if (!bound) {
+            bind.retired = true
+            current = null
+            runCatching { context.unbindService(bind) }
+            Log.w(LOG_TAG, "bindService returned false; is Hi Rokid (global) installed and authorized?")
+        }
         return bound
     }
 
     fun disconnect() {
-        service?.let { tryUnregisterAllCallbacks(it) }
-        if (bound) {
-            runCatching { context.unbindService(serviceConnection) }
-            bound = false
-        }
-        service = null
+        val bind = current ?: return
+        bind.retired = true
+        current = null
+        bind.service?.let { tryUnregisterAllCallbacks(bind, it) }
+        runCatching { context.unbindService(bind) }
         glassConnected = false
     }
 
-    fun isServiceConnected(): Boolean = bound && service != null
+    fun isServiceConnected(): Boolean = service != null
 
     fun isGlassBtConnected(): Boolean = glassConnected
 
@@ -315,8 +406,9 @@ class CXRLink(private val context: Context) {
     fun appUploadAndInstall(filePath: String, cbk: IGlassAppCbk) {
         if (!requireSession(CxrDefs.CXRSessionType.CUSTOMAPP)) return
         glassAppCbk = cbk
-        val svc = service
-        if (svc == null) {
+        val bind = liveBind()
+        val svc = bind?.service
+        if (bind == null || svc == null) {
             Log.e(LOG_TAG, "appUploadAndInstall: service is null")
             cbk.onInstallAppResult(false)
             return
@@ -329,7 +421,7 @@ class CXRLink(private val context: Context) {
         }
         try {
             val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-            svc.uploadAndInstallApk(file.name, fd, glassAppStub)
+            svc.uploadAndInstallApk(file.name, fd, bind.glassApp)
         } catch (t: Throwable) {
             Log.e(LOG_TAG, "appUploadAndInstall failed", t)
             cbk.onInstallAppResult(false)
@@ -340,13 +432,14 @@ class CXRLink(private val context: Context) {
         if (!requireSession(CxrDefs.CXRSessionType.CUSTOMAPP)) return
         glassAppCbk = cbk
         val pkg = session.customAppPackageName ?: return
-        val svc = service
-        if (svc == null) {
+        val bind = liveBind()
+        val svc = bind?.service
+        if (bind == null || svc == null) {
             Log.e(LOG_TAG, "appUninstall: service is null")
             cbk.onUnInstallAppResult(false)
             return
         }
-        tryCall { svc.uninstallApp(pkg, glassAppStub) }
+        tryCall { svc.uninstallApp(pkg, bind.glassApp) }
     }
 
     fun appStart(activityName: String, cbk: IGlassAppCbk) {
@@ -357,13 +450,14 @@ class CXRLink(private val context: Context) {
         if (!requireSession(CxrDefs.CXRSessionType.CUSTOMAPP)) return
         glassAppCbk = cbk
         val pkg = session.customAppPackageName ?: return
-        val svc = service
-        if (svc == null) {
+        val bind = liveBind()
+        val svc = bind?.service
+        if (bind == null || svc == null) {
             Log.e(LOG_TAG, "appStart: service is null")
             cbk.onOpenAppResult(false)
             return
         }
-        tryCall { svc.openApp(pkg, activityName, glassAppStub) }
+        tryCall { svc.openApp(pkg, activityName, bind.glassApp) }
         if (interruptAiWake) setInterruptAiWake(true)
     }
 
@@ -371,13 +465,14 @@ class CXRLink(private val context: Context) {
         if (!requireSession(CxrDefs.CXRSessionType.CUSTOMAPP)) return
         glassAppCbk = cbk
         val pkg = session.customAppPackageName ?: return
-        val svc = service
-        if (svc == null) {
+        val bind = liveBind()
+        val svc = bind?.service
+        if (bind == null || svc == null) {
             Log.e(LOG_TAG, "appStop: service is null")
             cbk.onStopAppResult(false)
             return
         }
-        tryCall { svc.stopApp(pkg, glassAppStub) }
+        tryCall { svc.stopApp(pkg, bind.glassApp) }
         setInterruptAiWake(false)
     }
 
@@ -385,12 +480,13 @@ class CXRLink(private val context: Context) {
         if (!requireSession(CxrDefs.CXRSessionType.CUSTOMAPP)) return
         glassAppCbk = cbk
         val pkg = session.customAppPackageName ?: return
-        val svc = service
-        if (svc == null) {
+        val bind = liveBind()
+        val svc = bind?.service
+        if (bind == null || svc == null) {
             Log.e(LOG_TAG, "appIsInstalled: service is null")
             cbk.onQueryAppResult(false)
             return
         }
-        tryCall { svc.queryGlassAppInstalled(pkg, glassAppStub) }
+        tryCall { svc.queryGlassAppInstalled(pkg, bind.glassApp) }
     }
 }

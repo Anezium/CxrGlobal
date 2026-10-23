@@ -72,7 +72,7 @@ SDK には `CXRLink.configCXRSession(CxrDefs.CXRSession)` という API があ�
 
 - **なぜ composite build か**: 利用側プロジェクトと並行して wrapper を編集することが多いため、publish 不要・編集即反映で動く形が便利。
 - **なぜ `dependencySubstitution` が必要か**: `includeBuild` だけだと CLI ビルドは通るが Android Studio のインデックスが座標を解決できず "Unresolved reference" エラーが出る。`dependencySubstitution` で座標 → プロジェクトの対応を明示することで IDE が解決できるようになる。
-- **将来 Maven 公開する場合**: `lib/build.gradle.kts` に `maven-publish` プラグインを足し、`publishToMavenLocal` で `~/.m2/repository` に publish。利用側は `mavenLocal()` を repository に追加すれば座標 (`com.example.cxrglobal:lib:0.2.0`) で参照できる。
+- **将来 Maven 公開する場合**: `lib/build.gradle.kts` に `maven-publish` プラグインを足し、`publishToMavenLocal` で `~/.m2/repository` に publish。利用側は `mavenLocal()` を repository に追加すれば座標 (`com.example.cxrglobal:lib:0.3.0`) で参照できる。
 
 ## 3. ファイル構成
 
@@ -140,11 +140,15 @@ lib/src/main/java/com/example/cxrglobal/
 
 本 wrapper は本家 `CXRLink` を経由しないので、この暗黙ロードを引き継がないと利用側で `Caps().serialize()` が `UnsatisfiedLinkError` で落ちる。「本家と同じ書き味」が建前である以上、この保証責任は wrapper 側にある。よって `CXRLink` の `init { }` ブロックで本家と同じ `loadLibrary("cxr-sock-proto-jni")` を呼んでいる。
 
-`.so` 自体は `client-l:1.0.3` / `cxr-service-bridge:1.0-20260522.063600-105` 由来で、16 KB page-size 対応済み。利用側で追加の jniLibs 設定は不要。
+`.so` 自体は `client-l:1.1.2` が依存する `cxr-service-bridge:1.0-20260715.121510-107` 由来で、16 KB page-size 対応済み。利用側で追加の jniLibs 設定は不要。
+
+この bridge はタイムスタンプ付き SNAPSHOT で、`maven.rokid.com` から消えると `client-l:1.1.2` はクリーンなキャッシュからビルドできなくなる。取得時 (2026-10-22) の arm64-v8a の sha256 先頭 16 桁: `libcaps.so` `ee8797a2cd2bcb48` (1.1.0 同梱版と同一)、`libcxr-sock-proto-jni.so` `70a2ec6ece30362d`、`libcxr-bridge-jni.so` `d41b16b654b050a0`、`libflora-cli.so` `62e8e744a08fc481`、`libmutils.so` `656d5bf078c8edfe`。
 
 ### スレッディング
 
-AIDL コールバックは Binder スレッドで届く。wrapper はスレッド切り替えしない (透過的に転送する)。利用側で UI を触る場合は自分で `runOnUiThread` 等する。`CXRLink` のフィールド (`glassConnected` 等) は `@Volatile` で保護しているがそれ以上の同期はない。
+AIDL コールバックは Binder スレッドで届く。`bindService` 1 回ごとに `Bind` オブジェクトを作り、AIDL Stub アダプタも `Bind` ごとに持つ。各イベントは、その `Bind` が現在の接続である間だけ転送される。リンク up/down、`onCXRLDisconnectedByServer`、シーン通知 (`onGlassCurrentScenesNotify`)、AI キーイベントはメインスレッドで転送するので、終わった `Bind` のシーン通知や AI キーがリンク down の後に届くことはない。それ以外 (BT 接続・デバイス情報・装着状態、CustomView、glass app の結果、audio / image / CustomCMD) は届いた Binder スレッドのまま転送する。利用側で UI を触る場合は自分で `runOnUiThread` 等する。
+
+`connect` / `disconnect` はメインスレッドから呼ぶ。置き換え・切断・`onDisconnectByServer`・`DeadObjectException` のいずれでも、`Bind` はどのスレッドからでも即座に retired になる。後始末 (`unbindService` とリンク down の通知) はメインスレッドで 1 回だけ行い、リンク up を通知済みの場合のみ down を通知する。retired な `Bind` はリンク up を報告せず、後継の接続を unbind せず、イベントも転送しない。接続処理 (`sendSdkVersion` → 各コールバック登録 → `isDeviceConnected`) は各ステップの前に `Bind` が現在のものかを確認し、retired ならそこで止まる。`connect` は保留中または retired の古い `Bind` の後始末を先に済ませてから新しい `Bind` を作る。
 
 ## 5. 機能追加のしかた
 
@@ -166,9 +170,9 @@ fun customViewClose(): Boolean {
 1. `lib/src/main/java/com/example/cxrglobal/callbacks/IFooCbk.kt` に自前の interface を定義 (引数は AIDL に揃える)
 2. `CXRLink.kt` に:
    - リスナ保持フィールド: `private var fooCbk: IFooCbk? = null`
-   - AIDL Stub アダプタ: `private val fooStub = object : IFooCallback.Stub() { ... fooCbk?.onFoo(...) }`
+   - AIDL Stub アダプタ: `Bind` の中に `val foo = object : IFooCallback.Stub() { ... }` を置き、`if (isCurrent()) fooCbk?.onFoo(...)` で転送 (セッション状態をリンク down と順序付ける必要があるイベントだけ `onMain { ... }`)
    - setter (本家命名規則に揃える): `fun setCXRFooCbk(cbk: IFooCbk?) { fooCbk = cbk }`
-   - `tryRegisterAllCallbacks` / `tryUnregisterAllCallbacks` に登録/解除を 1 行追加
+   - `onBindConnected` の setup リストと `tryUnregisterAllCallbacks` に登録/解除を 1 行追加
 
 これだけで OK。AIDL Stub アダプタを噛ませる理由は前述 (`com.rokid.*` を利用側に見せないため)。
 
